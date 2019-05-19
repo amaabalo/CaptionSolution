@@ -1,0 +1,110 @@
+{
+  "$schema-template": "1.0.0",
+  "modulesContent": {
+    "$edgeAgent": {
+      "properties.desired": {
+        "schemaVersion": "1.0",
+        "runtime": {
+          "type": "docker",
+          "settings": {
+            "minDockerVersion": "v1.25",
+            "loggingOptions": "",
+            "registryCredentials": {
+              "captionregistry": {
+                "username": "$CONTAINER_REGISTRY_USERNAME_captionregistry",
+                "password": "$CONTAINER_REGISTRY_PASSWORD_captionregistry",
+                "address": "captionregistry.azurecr.io"
+              }
+            }
+          }
+        },
+        "systemModules": {
+          "edgeAgent": {
+            "type": "docker",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-agent:1.0",
+              "createOptions": {}
+            }
+          },
+          "edgeHub": {
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-hub:1.0",
+              "createOptions": {
+                "HostConfig": {
+                  "PortBindings": {
+                    "5671/tcp": [
+                      {
+                        "HostPort": "5671"
+                      }
+                    ],
+                    "8883/tcp": [
+                      {
+                        "HostPort": "8883"
+                      }
+                    ],
+                    "443/tcp": [
+                      {
+                        "HostPort": "443"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "modules": {
+          "summarizer": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "mcr.microsoft.com/azure-cognitive-services/keyphrase",
+              "createOptions": {
+                "Env":["EULA=accept", "BILLING=https://westus2.api.cognitive.microsoft.com/text/analytics/v2.0", "APIKEY=2038a0834ae34f2695048ec620e2c7cc"], 
+                "HostConfig": {
+                  "PortBindings": {
+                    "5000/tcp": [
+                      {
+                        "HostPort": "5000"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "captioner": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "never",
+            "settings": {
+              "image": "${MODULES.captioner}",
+              "createOptions": {
+                "env": {
+                  "TEXT_SUMMARY_ENDPOINT":  {"value": "http://summarizer:5000/text/analytics/v2.0/keyPhrases"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "$edgeHub": {
+      "properties.desired": {
+        "schemaVersion": "1.0",
+        "routes": {
+          "captionerToIoTHub": "FROM /messages/modules/captioner/outputs/* INTO $upstream"
+        },
+        "storeAndForwardConfiguration": {
+          "timeToLiveSecs": 7200
+        }
+      }
+    }
+  }
+}
