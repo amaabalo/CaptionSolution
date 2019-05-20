@@ -60,12 +60,16 @@
           "summarizer": {
             "version": "1.0",
             "type": "docker",
-            "status": "running",
+            "status": "stopped",
             "restartPolicy": "always",
             "settings": {
               "image": "mcr.microsoft.com/azure-cognitive-services/keyphrase",
               "createOptions": {
-                "Env":["EULA=accept", "BILLING=https://westus2.api.cognitive.microsoft.com/text/analytics/v2.0", "APIKEY=2038a0834ae34f2695048ec620e2c7cc"], 
+                "Env": [
+                  "EULA=accept",
+                  "BILLING=https://westus2.api.cognitive.microsoft.com/text/analytics/v2.0",
+                  "APIKEY=2038a0834ae34f2695048ec620e2c7cc"
+                ],
                 "HostConfig": {
                   "PortBindings": {
                     "5000/tcp": [
@@ -78,17 +82,60 @@
               }
             }
           },
-          "captioner": {
+          "azureblobstorageoniotedge": {
             "version": "1.0",
             "type": "docker",
             "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "mcr.microsoft.com/azure-blob-storage:latest",
+              "createOptions": {
+                "Env":[
+                  "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
+                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
+                ],
+                "HostConfig": {
+                  "Binds": [
+                    "/srv/containerdata:/blobroot"
+                  ],
+                  "PortBindings": {
+                    "11002/tcp": [
+                      {
+                        "HostPort":"11002"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "captioner": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "stopped",
             "restartPolicy": "never",
             "settings": {
               "image": "${MODULES.captioner}",
               "createOptions": {
-                "env": {
-                  "TEXT_SUMMARY_ENDPOINT":  {"value": "http://summarizer:5000/text/analytics/v2.0/keyPhrases"}
-                }
+                "Env":[
+                  "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
+                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
+                ]
+              }
+            }
+          },
+          "master": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "${MODULES.master}",
+              "createOptions": {
+                "Env":[
+                  "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
+                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
+                ]
               }
             }
           }
@@ -99,12 +146,31 @@
       "properties.desired": {
         "schemaVersion": "1.0",
         "routes": {
-          "captionerToIoTHub": "FROM /messages/modules/captioner/outputs/* INTO $upstream"
+          "captionerToIoTHub": "FROM /messages/modules/captioner/outputs/* INTO $upstream",
+          "masterToIoTHub": "FROM /messages/modules/master/outputs/* INTO $upstream"
         },
         "storeAndForwardConfiguration": {
           "timeToLiveSecs": 7200
         }
       }
-    }
+    },
+    "azureblobstorageoniotedge":{
+      "properties.desired": {
+        "ttlSettings": {
+          "ttlOn": false, 
+          "timeToLiveInMinutes": 30 
+        },
+        "tieringSettings": {
+          "tieringOn": true,
+          "backlogPolicy": "OldestFirst",
+          "remoteStorageConnectionString": "DefaultEndpointsProtocol=https;AccountName=audiocaptionstorage;AccountKey=QvgKZ+JpM69MPks1I5x3gN4MTRWn5XbRu40/iAN21AHBVbS+iv9U9Sqnn45zV5GjemHddJGx2/EaZzWBC4Z+ig==;EndpointSuffix=core.windows.net",
+          "tieredContainers": {
+            "masteraudiocontainer": {
+              "target": "edgemasteraudiocontainer"
+            }
+          }
+        }
+      }
+   }
   }
 }

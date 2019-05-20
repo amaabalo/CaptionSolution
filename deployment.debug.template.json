@@ -89,6 +89,29 @@
                 }
               }
             }
+          },
+          "master": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "${MODULES.master.debug}",
+              "createOptions": {
+                "ExposedPorts": {
+                  "5678/tcp": {}
+                },
+                "HostConfig": {
+                  "PortBindings": {
+                    "5678/tcp": [
+                      {
+                        "HostPort": "5678"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -98,7 +121,8 @@
         "schemaVersion": "1.0",
         "routes": {
           "captionerToIoTHub": "FROM /messages/modules/captioner/outputs/* INTO $upstream",
-          "sensorTocaptioner": "FROM /messages/modules/tempSensor/outputs/temperatureOutput INTO BrokeredEndpoint(\"/modules/captioner/inputs/input1\")"
+          "sensorTocaptioner": "FROM /messages/modules/tempSensor/outputs/temperatureOutput INTO BrokeredEndpoint(\"/modules/captioner/inputs/input1\")",
+          "masterToIoTHub": "FROM /messages/modules/master/outputs/* INTO $upstream"
         },
         "storeAndForwardConfiguration": {
           "timeToLiveSecs": 7200
