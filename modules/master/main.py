@@ -3,6 +3,7 @@
 # full license information.
 
 import time
+from datetime import datetime
 import sys
 import os
 from os import listdir
@@ -10,6 +11,10 @@ from os.path import isfile, join, isdir
 import requests
 import json
 import io
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import cgi
+from queue import Queue
+from threading import Thread
 
 import iothub_client
 # pylint: disable=E0611
@@ -27,6 +32,73 @@ PROTOCOL = IoTHubTransportProvider.MQTT
 
 # global counters
 SEND_CALLBACKS = 0
+
+def stamp(string):
+    now = datetime.now()
+    string = str(now) + ": " + string
+    return string
+
+
+work_queue = Queue()
+#Create custom HTTPRequestHandler class
+class MasterServer(BaseHTTPRequestHandler):
+    
+    def _set_headers(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json-patch+json')
+        self.end_headers()
+    
+   	#handle POST command
+    def do_POST(self):
+        print(self.headers.items())
+        ctype = self.headers['content-type']
+
+        # only receive json content
+        if ctype != "application/json-patch+json":
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        length = int(self.headers['content-length'])
+        job = json.loads(self.rfile.read(length).decode("utf-8"))
+        job["host"] = self.headers["host"]
+        work_queue.put_nowait(job)
+        response = {}
+        response["received"] = "ok"
+        self._set_headers()
+        self.wfile.write(bytes(json.dumps(response), "utf-8"))
+		
+def run():
+    port = 16000
+    print(stamp('Master server is starting on port {}...'.format(port)))
+    server_address = ('', 16000)
+    httpd = HTTPServer(server_address, MasterServer)
+    print(stamp('Master server is running on port {}...'.format(port)))
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        httpd.server_close()
+        print(stamp("Master server on port {} has been stopped.".format(port)))
+
+def do_job(job):
+    request_type = job["request-type"]
+    host = job["host"]
+    if request_type == "peer_join":
+        print(stamp("Master has registered the device at {}".format(host)))
+    elif request_type == "peer_leave":
+        print(stamp("Master notes the device at {}'s intent to leave.".format(host)))
+    elif request_type == "caption":
+        audio_file_name = job["audio-file-name"]
+        print(stamp("Master has queued a caption request for audio {} from the device at {}".format(audio_file_name, host)))
+
+def work():
+    while 1:
+        job = None
+        if work_queue.qsize() > 0:
+            job = work_queue.get_nowait()
+        if job:
+            do_job(job)
+        time.sleep(5)
 
 # Send a message to IoT Hub
 # Route output1 to $upstream in deployment.template.json
@@ -72,7 +144,16 @@ def main(block_blob_service, container_name, audio_directory):
 
         #upload audio samples to directory
         audio_files_to_blob_storage(block_blob_service, container_name, audio_directory)
-        
+
+        # start request handling thread
+        server_thread = Thread(target=run)
+        server_thread.start()
+        # start request processing thread
+        worker_thread = Thread(target=work)
+        worker_thread.start()
+
+        server_thread.join()
+        worker_thread.join()
         
         while True:
             #send_to_hub(classification)

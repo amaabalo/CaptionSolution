@@ -7,11 +7,14 @@ import sys
 import os
 import requests
 import json
+from queue import Queue
+import cgi
 
 import iothub_client
 # pylint: disable=E0611
 from iothub_client import IoTHubModuleClient, IoTHubClientError, IoTHubTransportProvider
 from iothub_client import IoTHubMessage, IoTHubMessageDispositionResult, IoTHubError
+from http.server import BaseHTTPRequestHandler, HTTPServer
 # pylint: disable=E0401
 
 # messageTimeout - the maximum time in milliseconds until a message times out.
@@ -23,6 +26,33 @@ PROTOCOL = IoTHubTransportProvider.MQTT
 
 # global counters
 SEND_CALLBACKS = 0
+
+work_queue = Queue()
+#Create custom HTTPRequestHandler class
+class PeerServer(BaseHTTPRequestHandler):
+    
+    def _set_headers(self):
+ 		self.send_response(200)
+		self.send_header('Content-type', 'application/json-patch+json')
+		self.end_headers()
+    
+   	#handle POST command
+    def do_POST(self):
+        ctype = self.headers['content-type']
+
+        # only receive json content
+        if ctype != "application/json-patch+json":
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        length = int(self.headers['content-length'])
+        message = json.loads(self.rfile.read(length).decode("utf-8"))
+        work_queue.put_nowait(message)
+        response = {}
+        response["received"] = "ok"
+        self._set_headers()
+        self.wfile.write(bytes(json.dumps(response), "utf-8"))
 
 # Send a message to IoT Hub
 # Route output1 to $upstream in deployment.template.json

@@ -116,26 +116,33 @@
             "restartPolicy": "never",
             "settings": {
               "image": "${MODULES.captioner}",
-              "createOptions": {
-                "Env":[
-                  "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
-                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
-                ]
-              }
+              "createOptions": {}
             }
           },
           "master": {
             "version": "1.0",
             "type": "docker",
             "status": "running",
-            "restartPolicy": "always",
+            "restartPolicy": "never",
             "settings": {
               "image": "${MODULES.master}",
               "createOptions": {
                 "Env":[
                   "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
                   "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
-                ]
+                ],
+                "ExposedPorts": {
+                  "16000/tcp": {}
+                },
+                "HostConfig": {
+                  "PortBindings": {
+                    "16000/tcp": [
+                      {
+                        "HostPort": "16000"
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
