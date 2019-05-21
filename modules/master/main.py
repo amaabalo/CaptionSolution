@@ -15,6 +15,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import cgi
 from queue import Queue, Empty
 from threading import Thread
+import asyncio
+from kademlia.network import Server
+from pydub import AudioSegment
+import math
 
 import iothub_client
 # pylint: disable=E0611
@@ -22,9 +26,22 @@ from iothub_client import IoTHubModuleClient, IoTHubClientError, IoTHubTransport
 from iothub_client import IoTHubMessage, IoTHubMessageDispositionResult, IoTHubError
 from azure.storage.blob import BlockBlobService, PublicAccess
 # pylint: disable=E0401
+worker_number = 1
+import logging
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+log = logging.getLogger('kademlia')
+log.addHandler(handler)
+log.setLevel(logging.DEBUG)
+current_worker = 0
+all_workers = []
 
+block_blob_service = None
 MASTER_PORT = 16000
 PEER_PORT = 16001
+HEADERS = {"Content-Type" : "application/json-patch+json"}
+container_name = None
 
 # messageTimeout - the maximum time in milliseconds until a message times out.
 # The timeout period starts at IoTHubModuleClient.send_event_async.
@@ -52,7 +69,6 @@ class MasterServer(BaseHTTPRequestHandler):
     
    	#handle POST command
     def do_POST(self):
-        print(self.headers.items())
         ctype = self.headers['content-type']
 
         # only receive json content
@@ -66,12 +82,17 @@ class MasterServer(BaseHTTPRequestHandler):
         work_queue.put_nowait(job)
         response = {}
         response["received"] = "ok"
+        if job["request-type"] == "peer_join":
+            global worker_number
+            response["id"] = worker_number
+            all_workers.append(job["source"])
+            worker_number += 1
         self._set_headers()
         self.wfile.write(bytes(json.dumps(response), "utf-8"))
 		
-def run():
+def run_server():
     print(stamp('Master server is starting on port {}...'.format(MASTER_PORT)))
-    server_address = ('', 16000)
+    server_address = ('', MASTER_PORT)
     httpd = HTTPServer(server_address, MasterServer)
     print(stamp('Master server is running on port {}...'.format(MASTER_PORT)))
     try:
@@ -89,7 +110,51 @@ def do_job(job):
         print(stamp("Master notes the device at {}'s intent to leave.".format(source)))
     elif request_type == "caption":
         audio_file_name = job["audio-file-name"]
+        schedule_caption_job(audio_file_name)
         print(stamp("Master has queued a caption request for audio {} from the device at {}".format(audio_file_name, source)))
+
+def send_caption_job(audio_slice_name):
+    global all_workers
+    if not all_workers:
+        print(stamp("Master could not send job. No available workers."))
+        return
+
+    content = {"request-type" : "caption",
+                "source" :"MASTER_IP",
+                "audio-file-name" : audio_slice_name}
+
+    global current_worker
+    response = requests.post("http://" + all_workers[current_worker] + ":" + str(PEER_PORT), headers = HEADERS, json = content)
+    if (response.status_code != 200):
+        print (stamp("Peer's caption request was unsuccessful."))
+        return False
+
+    print(stamp("Master sent job {} to peer {}.".format(audio_slice_name, all_workers[current_worker])))
+    current_worker = (current_worker + 1) % len(all_workers)
+
+def schedule_caption_job(audio_file_name):
+    # Download the blob(s).
+    # Add '_DOWNLOADED' as prefix to '.txt' so you can see both files in Documents.
+    full_path_to_file2 = os.path.join("./audio_samples", audio_file_name)
+    print("\nDownloading blob to " + full_path_to_file2)
+    #block_blob_service.get_blob_to_path(container_name, audio_file_name, full_path_to_file2)
+    new_audio = AudioSegment.from_wav(full_path_to_file2)
+    t1 = 0
+    duration = 10 * 1000
+    i = 0
+
+    ct = int (math.ceil(float(len(new_audio)) / duration ))
+    while (t1 < len(new_audio)):
+        t2 = t1 + duration
+        temp_audio = new_audio[t1:t2]
+        #temp_audio.export('temp.wav', format="wav")
+        just_name = audio_file_name.split('.')[0]
+        cloud_name = "{}_{}_{}.wav".format(just_name, ct, i)
+        #block_blob_service.create_blob_from_path(container_name, cloud_name, "temp.wav")
+        send_caption_job(cloud_name)
+        t1 = t2
+        i += 1
+
 def try_get_nowait():
     job = None
     try:
@@ -107,6 +172,19 @@ def work():
                 do_job(job)
                 job = try_get_nowait()
         time.sleep(5)
+
+def master_kademlia_join(loop):
+    node = Server()
+    loop.run_until_complete(node.listen(5678))
+    try:
+        print(stamp("Master server has joined the Kademlia P2P network for the DHT."))
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.stop()
+        loop.close()
+    return node
 
 # Send a message to IoT Hub
 # Route output1 to $upstream in deployment.template.json
@@ -135,7 +213,7 @@ class HubManager(object):
         self.client.send_event_async(
             outputQueueName, event, send_confirmation_callback, send_context)
 
-def main(block_blob_service, container_name, audio_directory):
+def main(audio_directory):
     try:
         print ( "Simulated text summary Azure IoT Edge. Press Ctrl-C to exit." )
 
@@ -151,29 +229,28 @@ def main(block_blob_service, container_name, audio_directory):
         block_blob_service.set_container_acl(container_name, public_access=PublicAccess.Container)
 
         #upload audio samples to directory
-        audio_files_to_blob_storage(block_blob_service, container_name, audio_directory)
+        audio_files_to_blob_storage(audio_directory)
 
         # start request handling thread
-        server_thread = Thread(target=run)
+        server_thread = Thread(target=run_server)
         server_thread.start()
+
         # start request processing thread
         worker_thread = Thread(target=work)
         worker_thread.start()
-
-        server_thread.join()
-        worker_thread.join()
         
-        while True:
-            #send_to_hub(classification)
-            time.sleep(10)
+        # Initiate the Kademlia P2P network for the DHT
+        loop = asyncio.get_event_loop()
+        loop.set_debug(True)
+        node = master_kademlia_join(loop)
     
 
     except KeyboardInterrupt:
         print ( "IoT Edge module sample stopped" )
 
 
-def audio_files_to_blob_storage(block_blob_service, container_name, audio_directory):
-    print ( "Uploading audio samples to local blob storage.")
+def audio_files_to_blob_storage(audio_directory):
+    print (stamp("Uploading audio samples to local blob storage."))
     if (not isdir(audio_directory)):
         print("Error: Invalid directory \"" + audio_directory + "\". Please supply an existing directory.")
         return
@@ -191,7 +268,7 @@ def audio_files_to_blob_storage(block_blob_service, container_name, audio_direct
                 content = audio_file.read()
             '''
 
-    print("Uploaded", count, "files to local blob storage as blobs.")
+    print(stamp("Uploaded {} files to local blob storage as blobs.".format(count)))
 
 
 if __name__ == '__main__':
@@ -199,7 +276,6 @@ if __name__ == '__main__':
         # Retrieve the local storage account name and key from container environment
         account_name = os.getenv('LOCAL_STORAGE_ACCOUNT_NAME', "")
         account_key = os.getenv('LOCAL_STORAGE_ACCOUNT_KEY', "")
-        print("account_name,account_key", account_name, account_key)
     except ValueError as error:
         print (error)
         sys.exit(1)
@@ -212,4 +288,4 @@ if __name__ == '__main__':
     block_blob_service = BlockBlobService(account_name=account_name, account_key=account_key, connection_string=connection_string)
     container_name = "masteraudiocontainer"
     audio_directory = "./audio_samples/"
-    main(block_blob_service, container_name, audio_directory)
+    main(audio_directory)

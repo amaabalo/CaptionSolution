@@ -7,8 +7,12 @@ import sys
 import os
 import requests
 import json
-from queue import Queue
+from queue import Queue, Empty
 import cgi
+import asyncio
+from kademlia.network import Server
+import logging
+from threading import Thread
 
 import iothub_client
 # pylint: disable=E0611
@@ -16,6 +20,13 @@ from iothub_client import IoTHubModuleClient, IoTHubClientError, IoTHubTransport
 from iothub_client import IoTHubMessage, IoTHubMessageDispositionResult, IoTHubError
 from http.server import BaseHTTPRequestHandler, HTTPServer
 # pylint: disable=E0401
+
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+log = logging.getLogger('kademlia')
+log.addHandler(handler)
+log.setLevel(logging.DEBUG)
 
 # messageTimeout - the maximum time in milliseconds until a message times out.
 # The timeout period starts at IoTHubModuleClient.send_event_async.
@@ -32,6 +43,8 @@ PEER_PORT = 16001
 MASTER_IP = None
 SELF_IP = None
 HEADERS = {"Content-Type" : "application/json-patch+json"}
+loop = None
+node = None
 
 def stamp(string):
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -64,6 +77,25 @@ class PeerServer(BaseHTTPRequestHandler):
         response["received"] = "ok"
         self._set_headers()
         self.wfile.write(bytes(json.dumps(response), "utf-8"))
+
+def run_server():
+    print(stamp('Peer server is starting on port {}...'.format(PEER_PORT)))
+    server_address = ('', PEER_PORT)
+    httpd = HTTPServer(server_address, PeerServer)
+    print(stamp('Peer server is running on port {}...'.format(PEER_PORT)))
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        httpd.server_close()
+        print(stamp("Peer server on port {} has been stopped.".format(PEER_PORT)))
+
+def peer_kademlia_join():
+    node = Server()
+    loop.run_until_complete(node.listen(5678))
+    loop.run_until_complete(node.bootstrap([(MASTER_IP, 5678)]))
+    time.sleep(7)
+    print(stamp("Peer has joined the Kademlia P2P network for the DHT."))
+    return node
 
 # Send a message to IoT Hub
 # Route output1 to $upstream in deployment.template.json
@@ -128,10 +160,10 @@ def send_leave_request():
     print(stamp("Peer's leave request was successful."))
     return True
 
-def send_caption_request():
+def send_caption_request(audio_file_name):
     content = {"request-type" : "caption",
                 "source" : SELF_IP,
-                "audio-file-name" : "fake_news.wav"}
+                "audio-file-name" : audio_file_name}
     # Upload the blob here
 
     response = requests.post("http://" + MASTER_IP + ":16000", headers = HEADERS, json = content)
@@ -141,6 +173,37 @@ def send_caption_request():
     print(stamp("Peer's caption request was successful."))
     return True
 
+def add_to_dht(key, value):
+    loop.run_until_complete(node.set(key, value))
+
+def try_get_nowait():
+    job = None
+    try:
+        job = work_queue.get_nowait()
+    except Empty:
+        job = None
+    return job
+
+def do_job(job):
+    request_type = job["request-type"]
+    source = job["source"]
+    if request_type == "caption":
+        audio_file_name = job["audio-file-name"]
+        print(stamp("Peer has queued a caption request for audio {} from the Master".format(audio_file_name)))
+        add_to_dht(audio_file_name, "Dummy Caption Dummy Caption Dummy Caption Dummy Caption.")
+
+
+def work(lp):
+    asyncio.set_event_loop(lp)
+    print(stamp('Peer work processor is running on port {}...'.format(PEER_PORT)))
+    while 1:
+        job = None
+        if work_queue.qsize() > 0:
+            job = try_get_nowait()
+            while job:
+                do_job(job)
+                job = try_get_nowait()
+        time.sleep(5)
 
 def main(documents, textSummaryEndpoint):
     print ("Simulated distributed captioning on Azure IoT Edge. Press Ctrl-C to exit.")
@@ -155,7 +218,28 @@ def main(documents, textSummaryEndpoint):
         # Register self with Master.
         send_join_request()
 
-        send_caption_request()
+        # Join the Kademlia P2P network for the DHT
+        global loop
+        loop = asyncio.get_event_loop()
+        loop.set_debug(True)
+        global node
+        node = peer_kademlia_join()
+
+        #give the node some time to join the network
+        time.sleep(5)
+
+        # start request handling thread
+        server_thread = Thread(target=run_server)
+        server_thread.start()
+
+        # start request processing thread
+        worker_thread = Thread(target=work, args=(loop,))
+        worker_thread.start()
+
+        while True:
+            send_caption_request("audio4.wav")
+            time.sleep(10)
+
 
         # Get the summary for the predicted captions
         while True:

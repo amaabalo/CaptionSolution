@@ -5,7 +5,7 @@ ADD ./audio_samples ./audio_samples
 ADD ./httpserver.py ./httpserver.py
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends vim-tiny libcurl4-openssl-dev python3-pip libboost-python1.58-dev libpython3-dev && \
+    apt-get install -y --no-install-recommends tcpdump vim-tiny libcurl4-openssl-dev python3-pip libboost-python1.58-dev libpython3-dev && \
     rm -rf /var/lib/apt/lists/* 
 
 RUN pip3 install --upgrade pip
