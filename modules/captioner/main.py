@@ -27,14 +27,25 @@ PROTOCOL = IoTHubTransportProvider.MQTT
 # global counters
 SEND_CALLBACKS = 0
 
+MASTER_PORT = 16000
+PEER_PORT = 16001
+MASTER_IP = None
+SELF_IP = None
+HEADERS = {"Content-Type" : "application/json-patch+json"}
+
+def stamp(string):
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    string = now + "\t" + string
+    return string
+
 work_queue = Queue()
 #Create custom HTTPRequestHandler class
 class PeerServer(BaseHTTPRequestHandler):
     
     def _set_headers(self):
- 		self.send_response(200)
-		self.send_header('Content-type', 'application/json-patch+json')
-		self.end_headers()
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json-patch+json')
+        self.end_headers()
     
    	#handle POST command
     def do_POST(self):
@@ -97,10 +108,43 @@ class HubManager(object):
         self.client.send_event_async(
             outputQueueName, event, send_confirmation_callback, send_context)
 
-def main(documents, textSummaryEndpoint):
-    try:
-        print ( "Simulated text summary Azure IoT Edge. Press Ctrl-C to exit." )
+def send_join_request():
+    content = {"request-type" : "peer_join",
+                "source" : SELF_IP}
+    response = requests.post("http://" + MASTER_IP + ":16000", headers = HEADERS, json = content)
+    if (response.status_code != 200):
+        print (stamp("Peer's join request was unsuccessful."))
+        return False
+    print(stamp("Peer's join request was successful."))
+    return True
 
+def send_leave_request():
+    content = {"request-type" : "peer_leave",
+                "source" : SELF_IP}
+    response = requests.post("http://" + MASTER_IP + ":16000", headers = HEADERS, json = content)
+    if (response.status_code != 200):
+        print (stamp("Peer's leave request was unsuccessful."))
+        return False
+    print(stamp("Peer's leave request was successful."))
+    return True
+
+def send_caption_request():
+    content = {"request-type" : "caption",
+                "source" : SELF_IP,
+                "audio-file-name" : "fake_news.wav"}
+    # Upload the blob here
+
+    response = requests.post("http://" + MASTER_IP + ":16000", headers = HEADERS, json = content)
+    if (response.status_code != 200):
+        print (stamp("Peer's caption request was unsuccessful."))
+        return False
+    print(stamp("Peer's caption request was successful."))
+    return True
+
+
+def main(documents, textSummaryEndpoint):
+    print ("Simulated distributed captioning on Azure IoT Edge. Press Ctrl-C to exit.")
+    try:
         try:
             global hubManager 
             hubManager = HubManager(PROTOCOL, MESSAGE_TIMEOUT)
@@ -108,26 +152,58 @@ def main(documents, textSummaryEndpoint):
             print ( "Unexpected error %s from IoTHub" % iothub_error )
             return
 
-        print ( "The sample is now sending text for processing and will do so indefinitely.")
+        # Register self with Master.
+        send_join_request()
 
+        send_caption_request()
+
+        # Get the summary for the predicted captions
         while True:
-            classification = sendTextForProcessing(documents, textSummaryEndpoint)
-            send_to_hub(classification)
+            summary = sendTextForProcessing(documents, textSummaryEndpoint)
+            print(stamp("Got summary for captions."))
+            send_to_hub(summary)
             time.sleep(10)
 
     except KeyboardInterrupt:
+        send_leave_request()
         print ( "IoT Edge module sample stopped" )
 
-if __name__ == '__main__':
-    try:
-        # Retrieve the summary server endpoint from container environment
-        TEXT_SUMMARY_ENDPOINT = "http://summarizer:5000/text/analytics/v2.0/keyPhrases"
+def test_connection():
+    content1 = {"request-type" : "peer_join",
+            "source" : "10.16.87.123",
+            "audio-file-name" : ""}
+    content2 = {"request-type" : "peer_leave",
+            "source" : "10.16.87.123",
+            "audio-file-name" : ""}
+    content3 = {"request-type" : "caption",
+            "source" : "10.16.87.123",
+            "audio-file-name" : "fake_news.wav"}
+    headers = {"Content-Type" : "application/json-patch+json"}
 
-        print("endpoint", TEXT_SUMMARY_ENDPOINT, '..')
+    while 1:
+        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content1)
+        print(json.dumps(response.json()))
+        time.sleep(10)
+        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content2)
+        print(json.dumps(response.json()))
+        time.sleep(10)
+        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content3)
+        print(json.dumps(response.json()))
+        time.sleep(10)
+
+if __name__ == '__main__':
+    TEXT_SUMMARY_ENDPOINT = "http://summarizer:5000/text/analytics/v2.0/keyPhrases"
+    try:
+        # Retrieve the Master's ip
+        MASTER_IP = os.getenv('MASTER', "")
+        SELF_IP = os.getenv('SELF', "")
     except ValueError as error:
-        print ( error )
+        print (error)
         sys.exit(1)
 
+    if (not MASTER_IP) or (not SELF_IP):
+        print("Error: MASTER or SELF environment variables not found.")
+        sys.exit(1)
 
     documents = {'documents' : [
         {'id': '1', 'language': 'en', 'text': 'I had a wonderful experience! The rooms were wonderful and the staff was helpful.'},

@@ -116,7 +116,24 @@
             "restartPolicy": "never",
             "settings": {
               "image": "${MODULES.captioner}",
-              "createOptions": {}
+              "createOptions": {
+                "Env": [
+                  "MASTER=$MASTER_IP",
+                  "SELF=$SELF_IP"
+                ],
+                "ExposedPorts": {
+                  "16001/tcp": {}
+                },
+                "HostConfig": {
+                  "PortBindings": {
+                    "16001/tcp": [
+                      {
+                        "HostPort": "16001"
+                      }
+                    ]
+                  }
+                }
+              }
             }
           },
           "master": {
@@ -127,7 +144,7 @@
             "settings": {
               "image": "${MODULES.master}",
               "createOptions": {
-                "Env":[
+                "Env": [
                   "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
                   "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
                 ],

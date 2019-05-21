@@ -13,7 +13,7 @@ import json
 import io
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import cgi
-from queue import Queue
+from queue import Queue, Empty
 from threading import Thread
 
 import iothub_client
@@ -22,6 +22,9 @@ from iothub_client import IoTHubModuleClient, IoTHubClientError, IoTHubTransport
 from iothub_client import IoTHubMessage, IoTHubMessageDispositionResult, IoTHubError
 from azure.storage.blob import BlockBlobService, PublicAccess
 # pylint: disable=E0401
+
+MASTER_PORT = 16000
+PEER_PORT = 16001
 
 # messageTimeout - the maximum time in milliseconds until a message times out.
 # The timeout period starts at IoTHubModuleClient.send_event_async.
@@ -34,10 +37,9 @@ PROTOCOL = IoTHubTransportProvider.MQTT
 SEND_CALLBACKS = 0
 
 def stamp(string):
-    now = datetime.now()
-    string = str(now) + ": " + string
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    string = now + "\t" + string
     return string
-
 
 work_queue = Queue()
 #Create custom HTTPRequestHandler class
@@ -61,7 +63,6 @@ class MasterServer(BaseHTTPRequestHandler):
 
         length = int(self.headers['content-length'])
         job = json.loads(self.rfile.read(length).decode("utf-8"))
-        job["host"] = self.headers["host"]
         work_queue.put_nowait(job)
         response = {}
         response["received"] = "ok"
@@ -69,35 +70,42 @@ class MasterServer(BaseHTTPRequestHandler):
         self.wfile.write(bytes(json.dumps(response), "utf-8"))
 		
 def run():
-    port = 16000
-    print(stamp('Master server is starting on port {}...'.format(port)))
+    print(stamp('Master server is starting on port {}...'.format(MASTER_PORT)))
     server_address = ('', 16000)
     httpd = HTTPServer(server_address, MasterServer)
-    print(stamp('Master server is running on port {}...'.format(port)))
+    print(stamp('Master server is running on port {}...'.format(MASTER_PORT)))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.server_close()
-        print(stamp("Master server on port {} has been stopped.".format(port)))
+        print(stamp("Master server on port {} has been stopped.".format(MASTER_PORT)))
 
 def do_job(job):
     request_type = job["request-type"]
-    host = job["host"]
+    source = job["source"]
     if request_type == "peer_join":
-        print(stamp("Master has registered the device at {}".format(host)))
+        print(stamp("Master has registered the device at {}".format(source)))
     elif request_type == "peer_leave":
-        print(stamp("Master notes the device at {}'s intent to leave.".format(host)))
+        print(stamp("Master notes the device at {}'s intent to leave.".format(source)))
     elif request_type == "caption":
         audio_file_name = job["audio-file-name"]
-        print(stamp("Master has queued a caption request for audio {} from the device at {}".format(audio_file_name, host)))
+        print(stamp("Master has queued a caption request for audio {} from the device at {}".format(audio_file_name, source)))
+def try_get_nowait():
+    job = None
+    try:
+        job = work_queue.get_nowait()
+    except Empty:
+        job = None
+    return job
 
 def work():
     while 1:
         job = None
         if work_queue.qsize() > 0:
-            job = work_queue.get_nowait()
-        if job:
-            do_job(job)
+            job = try_get_nowait()
+            while job:
+                do_job(job)
+                job = try_get_nowait()
         time.sleep(5)
 
 # Send a message to IoT Hub
@@ -193,7 +201,7 @@ if __name__ == '__main__':
         account_key = os.getenv('LOCAL_STORAGE_ACCOUNT_KEY', "")
         print("account_name,account_key", account_name, account_key)
     except ValueError as error:
-        print ( error )
+        print (error)
         sys.exit(1)
 
     if (not account_name) or (not account_key):
