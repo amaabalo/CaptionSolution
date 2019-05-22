@@ -122,13 +122,19 @@
                   "SELF=$SELF_IP"
                 ],
                 "ExposedPorts": {
-                  "16001/tcp": {}
+                  "16001/tcp": {},
+                  "5678/udp": {}
                 },
                 "HostConfig": {
                   "PortBindings": {
                     "16001/tcp": [
                       {
                         "HostPort": "16001"
+                      }
+                    ],
+                    "5678/udp": [
+                      {
+                        "HostPort": "5678"
                       }
                     ]
                   }
@@ -149,13 +155,19 @@
                   "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
                 ],
                 "ExposedPorts": {
-                  "16000/tcp": {}
+                  "16000/tcp": {},
+                  "5678/udp": {}
                 },
                 "HostConfig": {
                   "PortBindings": {
                     "16000/tcp": [
                       {
                         "HostPort": "16000"
+                      }
+                    ],
+                    "5678/udp": [
+                      {
+                        "HostPort": "5678"
                       }
                     ]
                   }

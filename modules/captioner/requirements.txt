@@ -1,3 +1,5 @@
 azure-iothub-device-client~=1.4.3
 requests
+azure-storage-blob
 kademlia
+google-cloud-speech==0.36.3

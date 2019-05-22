@@ -1,12 +1,17 @@
 FROM ubuntu:xenial
 
 WORKDIR /app
+ADD ./myfirstproject-bc8cbfe76298.json ./myfirstproject-bc8cbfe76298.json
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tcpdump vim-tiny libcurl4-openssl-dev python3-pip libboost-python1.58-dev libpython3-dev && \
     rm -rf /var/lib/apt/lists/* 
 
+RUN mkdir /app/temp_downloads/
+RUN chmod -R 777 /app/temp_downloads
+
 RUN pip3 install --upgrade pip
+RUN pip3 install --upgrade setuptools
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 

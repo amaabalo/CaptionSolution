@@ -27,6 +27,7 @@ from iothub_client import IoTHubMessage, IoTHubMessageDispositionResult, IoTHubE
 from azure.storage.blob import BlockBlobService, PublicAccess
 # pylint: disable=E0401
 worker_number = 1
+'''
 import logging
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -34,8 +35,11 @@ handler.setFormatter(formatter)
 log = logging.getLogger('kademlia')
 log.addHandler(handler)
 log.setLevel(logging.DEBUG)
+'''
 current_worker = 0
 all_workers = []
+
+SEND_TO_HUB = False
 
 block_blob_service = None
 MASTER_PORT = 16000
@@ -135,9 +139,11 @@ def send_caption_job(audio_slice_name):
 def schedule_caption_job(audio_file_name):
     # Download the blob(s).
     # Add '_DOWNLOADED' as prefix to '.txt' so you can see both files in Documents.
-    full_path_to_file2 = os.path.join("./audio_samples", audio_file_name)
+    temp_audio_file_name = "full_audio_temp.wav"
+    downloads_path = "/app/temp_downloads/"
+    full_path_to_file2 = os.path.join(downloads_path, temp_audio_file_name)
     print("\nDownloading blob to " + full_path_to_file2)
-    #block_blob_service.get_blob_to_path(container_name, audio_file_name, full_path_to_file2)
+    block_blob_service.get_blob_to_path(container_name, audio_file_name, full_path_to_file2)
     new_audio = AudioSegment.from_wav(full_path_to_file2)
     t1 = 0
     duration = 10 * 1000
@@ -147,10 +153,11 @@ def schedule_caption_job(audio_file_name):
     while (t1 < len(new_audio)):
         t2 = t1 + duration
         temp_audio = new_audio[t1:t2]
-        #temp_audio.export('temp.wav', format="wav")
+        temp_slice_path = os.path.join(downloads_path, 'temp.wav')
+        temp_audio.export(temp_slice_path, format="wav")
         just_name = audio_file_name.split('.')[0]
         cloud_name = "{}_{}_{}.wav".format(just_name, ct, i)
-        #block_blob_service.create_blob_from_path(container_name, cloud_name, "temp.wav")
+        block_blob_service.create_blob_from_path(container_name, cloud_name, temp_slice_path)
         send_caption_job(cloud_name)
         t1 = t2
         i += 1
@@ -189,6 +196,8 @@ def master_kademlia_join(loop):
 # Send a message to IoT Hub
 # Route output1 to $upstream in deployment.template.json
 def send_to_hub(strMessage):
+    if not SEND_TO_HUB:
+        return
     message = IoTHubMessage(bytearray(strMessage, 'utf8'))
     hubManager.send_event_to_output("output1", message, 0)
 
@@ -241,7 +250,7 @@ def main(audio_directory):
         
         # Initiate the Kademlia P2P network for the DHT
         loop = asyncio.get_event_loop()
-        loop.set_debug(True)
+        #loop.set_debug(True)
         node = master_kademlia_join(loop)
     
 
