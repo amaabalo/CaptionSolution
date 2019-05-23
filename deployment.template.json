@@ -119,7 +119,12 @@
               "createOptions": {
                 "Env": [
                   "MASTER=$MASTER_IP",
-                  "SELF=$SELF_IP"
+                  "SELF=$SELF_IP",
+                  "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS",
+                  "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
+                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY",
+                  "GLOBAL_STORAGE_ACCOUNT_NAME=$GLOBAL_STORAGE_ACCOUNT_NAME",
+                  "GLOBAL_STORAGE_ACCOUNT_KEY=$GLOBAL_STORAGE_ACCOUNT_KEY"
                 ],
                 "ExposedPorts": {
                   "16001/tcp": {},
@@ -151,8 +156,11 @@
               "image": "${MODULES.master}",
               "createOptions": {
                 "Env": [
+                  "MASTER=$MASTER_IP",
                   "LOCAL_STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME",
-                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY"
+                  "LOCAL_STORAGE_ACCOUNT_KEY=$STORAGE_ACCOUNT_KEY",
+                  "GLOBAL_STORAGE_ACCOUNT_NAME=$GLOBAL_STORAGE_ACCOUNT_NAME",
+                  "GLOBAL_STORAGE_ACCOUNT_KEY=$GLOBAL_STORAGE_ACCOUNT_KEY"
                 ],
                 "ExposedPorts": {
                   "16000/tcp": {},
@@ -207,6 +215,6 @@
           }
         }
       }
-   }
+    }
   }
 }

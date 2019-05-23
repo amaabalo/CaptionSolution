@@ -18,6 +18,9 @@ from google.cloud import speech
 from google.cloud.speech import enums
 from google.cloud.speech import types
 from azure.storage.blob import BlockBlobService, PublicAccess
+from azure.cosmosdb.table.tableservice import TableService
+from azure.cosmosdb.table.models import Entity
+import random
 
 import iothub_client
 # pylint: disable=E0611
@@ -50,11 +53,17 @@ SELF_IP = None
 HEADERS = {"Content-Type" : "application/json-patch+json"}
 loop = None
 node = None
-SEND_TO_HUB = False
+SEND_TO_HUB = True
 action_loop_time = None
 block_blob_service = None
 container_name = "masteraudiocontainer"
 client = speech.SpeechClient()
+TEXT_SUMMARY_ENDPOINT = None
+catalogue = None
+table_name = "masteraudiotable"
+table_partition_key = "fullAudioFiles"
+table_service = None
+peer_name = "PEER"
 
 def stamp(string):
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -100,11 +109,14 @@ def run_server():
         httpd.server_close()
         print(stamp("Peer server on port {} has been stopped.".format(PEER_PORT)))
 
+
 def peer_kademlia_join():
     temp = Server()
     loop.run_until_complete(temp.listen(5678))
     loop.run_until_complete(temp.bootstrap([(MASTER_IP, 5678)]))
-    print(stamp("Peer has joined the Kademlia P2P network for the DHT."))
+    msg = stamp("{} has joined the P2P network.".format(peer_name))
+    send_to_hub(msg)
+    print(msg)
     global node
     node = temp
     
@@ -184,6 +196,8 @@ def send_caption_request(audio_file_name):
     if (response.status_code != 200):
         print (stamp("Peer's caption request was unsuccessful."))
         return False
+    msg = stamp("{} has sent a caption request {}.".format(peer_name, audio_file_name))
+    send_to_hub(msg)
     print(stamp("Peer's caption request was successful."))
     return True
 
@@ -206,7 +220,7 @@ def do_job(job):
         print(stamp("Peer has queued a caption request for audio {} from the Master".format(audio_file_name)))
         t1 = time.monotonic()
         add_to_dht(audio_file_name, "Dummy Caption Dummy Caption Dummy Caption Dummy Caption.")
-        print("add to dht took {} seconds.".format(time.monotonic() - t1))
+        #print("add to dht took {} seconds.".format(time.monotonic() - t1))
 
 
 def work(lp):
@@ -264,15 +278,28 @@ async def do_job_async(job):
         t1 = time.monotonic()
         await node.set(audio_file_name, "Dummy Caption Dummy Caption Dummy Caption Dummy Caption.")
         #add_to_dht(audio_file_name, "Dummy Caption Dummy Caption Dummy Caption Dummy Caption.")
-        print("add to dht took {} seconds.".format(time.monotonic() - t1))
+        #print("add to dht took {} seconds.".format(time.monotonic() - t1))
+
+def notify_caption_completion(audio_slice_name):
+    content = {"request-type" : "caption_completion",
+                "source" : SELF_IP,
+                "audio-file-name" : audio_slice_name}
+
+    response = requests.post("http://" + MASTER_IP + ":16000", headers = HEADERS, json = content)
+    if (response.status_code != 200):
+        print (stamp("Master did not acknowledge peer's completion of job {}.".format(audio_slice_name)))
+        return False
+    print(stamp("Master acknowledged peer's completion of job {}.".format(audio_slice_name)))
+    return True
+
 
 num_requested = 0
 async def action_loop():
     global action_loop_time
     global num_requested
     while True:
-        if (num_requested < 1 and (time.monotonic() - action_loop_time) > 10):
-            send_caption_request("audio4.wav")
+        if (num_requested < len(catalogue) and (time.monotonic() - action_loop_time) > 10):
+            send_caption_request(catalogue[num_requested])
             action_loop_time = time.monotonic()
             num_requested += 1
         elif caption_queue.qsize() > 0:
@@ -281,15 +308,12 @@ async def action_loop():
                 audio_file_name, caption = res
                 t1 = time.monotonic()
                 await node.set(audio_file_name, caption)
-                print("add to dht took {} seconds.".format(time.monotonic() - t1))
+                #print("add to dht took {} seconds.".format(time.monotonic() - t1))
+                # Tell Master job has been completed
+                notify_caption_completion(audio_file_name)
                 res = try_get_nowait(caption_queue)
         await asyncio.sleep(0.2)
 
-'''
-async def main_loop():
-    t1 = loop.create_task(action_loop())    
-    await t1
-'''
 
 def send_job_to_google(job):
     temp_audio_file_name = "slice_audio_temp.wav"
@@ -319,7 +343,11 @@ def send_job_to_google(job):
     for result in response.results:
         # The first alternative is the most likely one for this portion.
         chosen_result = result.alternatives[0].transcript
-        print(u'Transcript: {}'.format(chosen_result))
+        #print(u'{} transcript: {}'.format(audio_file_name, chosen_result))
+        whole_result = whole_result + chosen_result
+    msg = stamp("{} has captioned {}: '{}'".format(peer_name, audio_file_name, whole_result))
+    send_to_hub(msg)
+    print(msg)
     return (audio_file_name, whole_result)
 
 def process_jobs():
@@ -330,10 +358,25 @@ def process_jobs():
         if (node != None) and work_queue.qsize() > 0:
             job = try_get_nowait(work_queue)
             while job:
-                res = send_job_to_google(job)
+                audio_file_name, whole_result = send_job_to_google(job)
+                # Get the summary of the captions
+                summary = ""
+                if (whole_result.strip() != ""):
+                    docs = {'documents' : [{'id': audio_file_name, 'language': 'en', 'text': whole_result}]}
+                    summary = sendTextForProcessing(docs, TEXT_SUMMARY_ENDPOINT)
+                    summary = json.loads(summary)
+                    summary = str.join(", ", summary["documents"][0]["keyPhrases"])
+                new_whole_result = "{}|{}".format(whole_result, summary)
+                res = (audio_file_name, new_whole_result)
                 caption_queue.put_nowait(res)
                 job = try_get_nowait(work_queue)
 
+def get_catalogue():
+    cat = []
+    records = table_service.query_entities(table_name, filter="PartitionKey eq '{}'".format(table_partition_key))
+    cat = [record.Name for record in records]
+    random.shuffle(cat)
+    return cat
 
 def main(textSummaryEndpoint):
     print ("Simulated distributed captioning on Azure IoT Edge. Press Ctrl-C to exit.")
@@ -352,6 +395,11 @@ def main(textSummaryEndpoint):
         # start speech transcription thread
         transcription_thread = Thread(target=process_jobs)
         transcription_thread.start()
+
+        # get the audio catalogue
+        global catalogue
+        catalogue = get_catalogue()
+        print(stamp("Retrieved the audio catalogue."))
 
         # initialize the loop
         global loop
@@ -395,56 +443,10 @@ def main(textSummaryEndpoint):
             node.stop()
             loop.close()
 
-        if (id == 1):
-            while True:
-                if (time.monotonic() - action_loop_time > 10):
-                    send_caption_request("audio4.wav")
-                    action_loop_time = time.monotonic()
-
-
-        '''
-        loop.run_until_complete(action_loop())
-        loop.close()
-        '''
-
-        '''
-        forever_thread = Thread(target=forever_loop, args=(loop,))
-        forever_thread.start()
-        '''
-            
-        # Get the summary for the predicted captions
-        while True:
-            #summary = sendTextForProcessing(documents, textSummaryEndpoint)
-            print(stamp("Got summary for captions."))
-            send_to_hub(summary)
-            time.sleep(10)
-
     except KeyboardInterrupt:
         send_leave_request()
         print ( "IoT Edge module sample stopped" )
 
-def test_connection():
-    content1 = {"request-type" : "peer_join",
-            "source" : "10.16.87.123",
-            "audio-file-name" : ""}
-    content2 = {"request-type" : "peer_leave",
-            "source" : "10.16.87.123",
-            "audio-file-name" : ""}
-    content3 = {"request-type" : "caption",
-            "source" : "10.16.87.123",
-            "audio-file-name" : "fake_news.wav"}
-    headers = {"Content-Type" : "application/json-patch+json"}
-
-    while 1:
-        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content1)
-        print(json.dumps(response.json()))
-        time.sleep(10)
-        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content2)
-        print(json.dumps(response.json()))
-        time.sleep(10)
-        response = requests.post("http://" + MASTER_IP + ":16000", headers = headers, json = content3)
-        print(json.dumps(response.json()))
-        time.sleep(10)
 
 if __name__ == '__main__':
     TEXT_SUMMARY_ENDPOINT = "http://summarizer:5000/text/analytics/v2.0/keyPhrases"
@@ -455,15 +457,18 @@ if __name__ == '__main__':
         SELF_IP = os.getenv('SELF', "")
         account_name = os.getenv('LOCAL_STORAGE_ACCOUNT_NAME', "")
         account_key = os.getenv('LOCAL_STORAGE_ACCOUNT_KEY', "")
+        global_storage_account_name = os.getenv('GLOBAL_STORAGE_ACCOUNT_NAME', "")
+        global_storage_account_key = os.getenv('GLOBAL_STORAGE_ACCOUNT_NAME', "")
     except ValueError as error:
         print (error)
         sys.exit(1)
 
-    if (MASTER_IP and SELF_IP and account_key and account_name) == "":
+    if (MASTER_IP and SELF_IP and account_key and account_name and global_storage_account_name and global_storage_account_key) == "":
         print("Error: MASTER or SELF environment variables not found.")
         sys.exit(1)
-
+    peer_name = "PEER@{}".format(SELF_IP)
     connection_string = 'DefaultEndpointsProtocol=https;BlobEndpoint=http://{}:11002/{};AccountName={};AccountKey={};'.format(MASTER_IP, account_name, account_name, account_key)
     block_blob_service = BlockBlobService(account_name=account_name, account_key=account_key, connection_string=connection_string)
-
+    table_connection_string = "DefaultEndpointsProtocol=https;AccountName=audiocaptionstorage;AccountKey=QvgKZ+JpM69MPks1I5x3gN4MTRWn5XbRu40/iAN21AHBVbS+iv9U9Sqnn45zV5GjemHddJGx2/EaZzWBC4Z+ig==;EndpointSuffix=core.windows.net"
+    table_service = TableService(account_name=global_storage_account_name, account_key=global_storage_account_key, connection_string=table_connection_string)
     main(TEXT_SUMMARY_ENDPOINT)
