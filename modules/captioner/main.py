@@ -212,62 +212,6 @@ def try_get_nowait(q):
         job = None
     return job
 
-def do_job(job):
-    request_type = job["request-type"]
-    source = job["source"]
-    if request_type == "caption":
-        audio_file_name = job["audio-file-name"]
-        print(stamp("Peer has queued a caption request for audio {} from the Master".format(audio_file_name)))
-        t1 = time.monotonic()
-        add_to_dht(audio_file_name, "Dummy Caption Dummy Caption Dummy Caption Dummy Caption.")
-        #print("add to dht took {} seconds.".format(time.monotonic() - t1))
-
-
-def work(lp):
-    asyncio.set_event_loop(lp)
-    print(stamp('Peer work processor is running on port {}...'.format(PEER_PORT)))
-    while 1:
-        job = None
-        # don't try to work until the server is available
-        if (node != None) and work_queue.qsize() > 0:
-            job = try_get_nowait(work_queue)
-            while job:
-                do_job(job)
-                job = try_get_nowait(work_queue)
-
-def work2(lp):
-    #asyncio.set_event_loop(lp)
-    global action_loop_time
-    action_loop_time = time.monotonic()
-    print(stamp('Peer work processor is running on port {}...'.format(PEER_PORT)))
-    while 1:
-        job = None
-        # don't try to work until the server is available
-        if (node != None) and work_queue.qsize() > 0:
-            job = try_get_nowait(work_queue)
-            if job:
-                do_job(job)
-            #job = try_get_nowait()
-        else:
-            if (time.monotonic() - action_loop_time > 10):
-                send_caption_request("audio4.wav")
-                action_loop_time = time.monotonic()
-
-
-
-def forever_loop(lp):
-    asyncio.set_event_loop(lp)
-    #loop.run_until_complete(node.listen(5678))
-    try:
-        lp.run_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.stop()
-        lp.close()
-    return node
-
-
 
 async def do_job_async(job):
     request_type = job["request-type"]
@@ -343,7 +287,6 @@ def send_job_to_google(job):
     for result in response.results:
         # The first alternative is the most likely one for this portion.
         chosen_result = result.alternatives[0].transcript
-        #print(u'{} transcript: {}'.format(audio_file_name, chosen_result))
         whole_result = whole_result + chosen_result
     msg = stamp("{} has captioned {}: '{}'".format(peer_name, audio_file_name, whole_result))
     send_to_hub(msg)
@@ -404,13 +347,7 @@ def main(textSummaryEndpoint):
         # initialize the loop
         global loop
         loop = asyncio.get_event_loop()
-        print(loop.is_running())
         #loop.set_debug(True)
-
-        
-        # start request processing thread
-        #worker_thread = Thread(target=work, args=(loop,))
-        #worker_thread.start()
 
         print(loop.is_running())
 
@@ -422,13 +359,6 @@ def main(textSummaryEndpoint):
 
         print(loop.is_running())
 
-        
-        '''
-        if id == 2:
-            work2(loop)
-        else:
-            loop.run_forever()
-        '''
 
         global action_loop_time
         action_loop_time = time.monotonic()
