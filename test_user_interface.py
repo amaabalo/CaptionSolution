@@ -30,7 +30,7 @@ port = int(sys.argv[2])
 mode = sys.argv[4]
 container_name = "masteraudiocontainer"
 account_name = "masterlocalstorage"
-account_key = "OkcVfp37Fqt5h9H5AoKLDXxMAOe1E3TF7d7HS7nWTYHOyn5DLw4YC0aRLSEMUOsTXJTvrH2nXM4xquls7Bs/pQ=="
+account_key = "<YOUR_ACCOUNT_KEY_HERE>"
 connection_string = 'DefaultEndpointsProtocol=https;BlobEndpoint=http://{}:11002/{};AccountName={};AccountKey={};'.format(master_ip, account_name, account_name, account_key)
 audio_file_name = sys.argv[3] 
 block_blob_service = BlockBlobService(account_name=account_name, account_key=account_key, connection_string=connection_string)
